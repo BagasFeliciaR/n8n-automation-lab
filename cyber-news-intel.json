@@ -1,0 +1,306 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            },
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -608,
+        -240
+      ],
+      "id": "b4f64ee0-9e61-4628-a3c3-6d2331265262",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -272,
+        -240
+      ],
+      "id": "850ff66d-436d-4a75-91bc-cf3144ff3426",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "url": "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "resultsPerPage",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -448,
+        -256
+      ],
+      "id": "ae2e0d84-8c84-4ec3-8dcd-3fdce8f0d0a1",
+      "name": "HTTP NVD"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mengambil 'memory' dari workflow\nconst staticData = $getWorkflowStaticData('global');\nstaticData.sentLinks = staticData.sentLinks || [];\n\nconst items = $input.all();\nlet newItems = [];\n\nitems.forEach(item => {\n  const data = item.json;\n  let normalized = {};\n\n  // Logika NVD\n  if (data.vulnerabilities) {\n    data.vulnerabilities.forEach(v => {\n      const cve = v.cve;\n      const link = `https://nvd.nist.gov/vuln/detail/${cve.id}`;\n      \n      // CEK DUPLIKAT: Jika link belum ada di memory\n      if (!staticData.sentLinks.includes(link)) {\n        normalized.json = {\n          date: cve.published,\n          source: 'NVD',\n          title: cve.id,\n          link: link,\n          raw_description: cve.descriptions?.find(d => d.lang === 'en')?.value || 'No desc'\n        };\n        newItems.push(normalized);\n        staticData.sentLinks.push(link); // Masukkan ke memory\n      }\n    });\n  } \n  // Logika RSS\n  else {\n    const link = data.link;\n    if (!staticData.sentLinks.includes(link)) {\n      newItems.push({\n        json: {\n          date: data.isoDate || new Date().toISOString(),\n          source: data.source || 'RSS Feed',\n          title: data.title || 'No Title',\n          link: link,\n          raw_description: data.contentSnippet || data.content || data.summary || 'No description'\n        }\n      });\n      staticData.sentLinks.push(link); // Masukkan ke memory\n    }\n  }\n});\n\n// Batasi memory agar tidak bengkak (simpan 200 link terakhir saja)\nif (staticData.sentLinks.length > 200) {\n  staticData.sentLinks = staticData.sentLinks.slice(-200);\n}\n\nreturn newItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -144,
+        -176
+      ],
+      "id": "f5eb81ba-6e96-4a3c-a12f-896ea74d775c",
+      "name": "Normalize"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nreturn items.map(item => {\n  const data = item.json;\n  const desc = data.raw_description || '';\n  const text = (data.title + ' ' + desc).toLowerCase();\n\n  let severity = 'LOW';\n  if (['rce', 'critical', 'zero-day', 'exploited'].some(k => text.includes(k))) severity = 'CRITICAL';\n  else if (['high', 'injection', 'overflow', 'bypass'].some(k => text.includes(k))) severity = 'HIGH';\n  else if (['medium', 'xss', 'csrf', 'disclosure'].some(k => text.includes(k))) severity = 'MEDIUM';\n\n  // Ambil 200 karakter pertama biar rapi di Discord\n  const summary = desc.length > 200 ? desc.substring(0, 200) + '...' : desc;\n\n  return {\n    json: {\n      ...data,\n      severity,\n      summary: summary || 'Summary not available'\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -176
+      ],
+      "id": "5b6123f8-5591-450b-aca0-ce36f8971e29",
+      "name": "Classify & Summarize"
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=🚨 **SECURITY ALERT: {{ $json.source }}** 🚨\n\n**Judul:** {{ $json.title }}\n**Severity:** {{ $json.severity }}\n**Link:** {{ $json.link }}\n\n**Summary:** {{ $json.summary.substring(0, 300) }}...",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        272,
+        -176
+      ],
+      "id": "912f5432-1e56-4952-84fe-db07b7a2574f",
+      "name": "Discord",
+      "webhookId": "c7dbbd47-59fb-40e6-8134-9c3a355744ad",
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "vdYtDACLvs1cjIRb",
+          "name": "Discord Webhook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "maxItems": 10
+      },
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        144,
+        -176
+      ],
+      "id": "04c96f34-5a07-4415-8861-58cbfb9abfef",
+      "name": "Limit"
+    },
+    {
+      "parameters": {
+        "url": "https://www.bleepingcomputer.com/feed/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        -448,
+        -384
+      ],
+      "id": "4d4b173b-b2c5-4955-995e-05ef271123f8",
+      "name": "BleepingComputer",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "url": "https://thehackernews.com/feeds/posts/default",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        -448,
+        -528
+      ],
+      "id": "e9c78e7b-bab9-4e24-894b-42844561b038",
+      "name": "TheHackerNews",
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "url": "https://www.darkreading.com/rss.xml",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        -448,
+        -112
+      ],
+      "id": "32eea602-6f28-4ba5-8912-d642827d29f6",
+      "name": "DarkReading",
+      "retryOnFail": true,
+      "maxTries": 2
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP NVD",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "BleepingComputer",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "TheHackerNews",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DarkReading",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP NVD": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Classify & Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify & Summarize": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BleepingComputer": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "TheHackerNews": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DarkReading": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "e8ab4866-58d7-421b-b880-b9956e625814",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "88feb57b761d2aa340a282ab4182c88a45376cfcfe1cf09bac510c00cfe9d1b6"
+  },
+  "id": "sWISxWQE2G8AI8Uq",
+  "tags": []
+}
